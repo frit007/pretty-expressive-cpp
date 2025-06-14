@@ -65,7 +65,7 @@ struct Cost {
     uint64_t lineCost;
 };
 
-enum class MeasureType {CONCAT, CHOICE, END};
+enum class MeasureType {CONCAT, TEXT, NEWLINE};
 struct Measure; // forward declaration
 
 struct MeasureConcat {
@@ -73,9 +73,11 @@ struct MeasureConcat {
     Measure* parentRight;
 };
 
-struct MeasureChoice {
-    Measure* parent;
-    bool goLeft;
+struct MeasureText {
+    uint32_t stringRef;
+};
+struct MeasureNewline {
+    uint32_t indent; // technically this can be infered based on last, however we have free space due to the union
 };
 
 // Measure must
@@ -84,7 +86,8 @@ struct MeasureChoice {
 struct Measure {
     union {
         MeasureConcat concat;
-        MeasureChoice choice;
+        MeasureText text;
+        MeasureNewline newline;
     };
     MeasureType type;
     uint16_t last;
@@ -93,7 +96,7 @@ struct Measure {
 };
 
 
-enum class TaintedTrunkType {LEFT, RIGHT, CHOICE, VALUE};
+enum class TaintedTrunkType {LEFT, RIGHT, VALUE};
 struct TaintedTrunk; // forward declaration
 struct TaintedTrunkLeft
 {
@@ -109,11 +112,6 @@ struct TaintedTrunkValue
 {
     Measure measure;
 };
-struct TaintedTrunkChoice
-{
-    TaintedTrunk* parent;
-    bool goLeft;
-};
 
 // tainted must be freed
 struct TaintedTrunk {
@@ -126,7 +124,6 @@ struct TaintedTrunk {
         TaintedTrunkLeft left;
         TaintedTrunkRight right;
         TaintedTrunkValue value;
-        TaintedTrunkChoice choice;
     };
 };
 
@@ -175,14 +172,16 @@ struct BlockAlloc {
     uint32_t remainingBytes;
 };
 
-uint32_t cacheDistance = 3;
+uint32_t cacheDistance = 7;
 uint32_t pageWidth = 80;
 uint32_t computationWidth = 100;
 // Keep documents grouped together in memory
 vector<Doc> docs;
 // parallel array with docs, 
 vector<int> cacheWeight;
-vector<string> strings;
+// 
+#define SPACE_STRING_REF 0
+vector<string> strings = {" "};
 vector<vector<DocCache>> cache;
 BlockAlloc blockAlloc = {nullptr, 0};
 // Since measures might be short or long lived we allocate them in bulk, 
@@ -190,7 +189,6 @@ BlockAlloc blockAlloc = {nullptr, 0};
 // Measures are the part of the program that would have to optimized more,
 vector<Measure*> measurePool;
 vector<TaintedTrunk*> taintedTrunkPool;
-#define CLEAN_MEMORY 0
 #if CLEAN_MEMORY
 // if the program has to continue afterwards we must free all of the memory we have allocated
 vector<void*> memoryLeaks;
@@ -218,7 +216,7 @@ void* persistentAlloc(uint32_t bytes) {
 Measure* allocateMeasure() {
     if (measurePool.size() == 0) {
         // if the pool is empty, then fill the pool
-        int allocationSize = 1000;
+        int allocationSize = 10000;
         void* m = malloc(sizeof(Measure) * allocationSize);
         #if CLEAN_MEMORY
         memoryLeaks.push_back(m)
@@ -241,9 +239,6 @@ void decMeasureRc(Measure* m) {
     }
     // m->rc--;
     // if (m->rc == 0) {
-    //     if (m->type == MeasureType::CHOICE) {
-    //         decMeasureRc(m->choice.parent);
-    //     }
     //     if (m->type == MeasureType::CONCAT) {
     //         decMeasureRc(m->concat.parentLeft);
     //         decMeasureRc(m->concat.parentRight);
@@ -282,17 +277,17 @@ void decTaintedTrunkRc(TaintedTrunk* t) {
     if (t->rc == UINT_MAX) { // these are the cached trunks, there is no reason to rc them
         return;
     }
-    // t->rc--;
-    // if (t->rc == 0) {
-    //     if (t->type == TaintedTrunkType::LEFT) {
-    //         decTaintedTrunkRc(t->left.leftTrunk);
-    //     } else if (t->type == TaintedTrunkType::RIGHT) {
-    //         decTaintedTrunkRc(t->right.rightTrunk);
-    //     } else if (t->type == TaintedTrunkType::VALUE) {
-    //         // nothing to do
-    //     }
-    //     taintedTrunkPool.push_back(t);
-    // }
+    t->rc--;
+    if (t->rc == 0) {
+        if (t->type == TaintedTrunkType::LEFT) {
+            decTaintedTrunkRc(t->left.leftTrunk);
+        } else if (t->type == TaintedTrunkType::RIGHT) {
+            decTaintedTrunkRc(t->right.rightTrunk);
+        } else if (t->type == TaintedTrunkType::VALUE) {
+            // nothing to do
+        }
+        taintedTrunkPool.push_back(t);
+    }
 }
 void incTaintedTrunkRc(TaintedTrunk* m) {
     if (m->rc == UINT_MAX) { // these are the cached trunks, there is no reason to rc them
@@ -432,6 +427,8 @@ Measure* measureConcat(Measure* left, Measure* right) {
     newMeasure->concat.parentRight = right;
     newMeasure->cost = costAdd(left->cost, right->cost);
     newMeasure->last = right->last;
+    incMeasureRc(left);
+    incMeasureRc(right);
     return newMeasure;
 }
 
@@ -482,10 +479,6 @@ int mergeList(Measure** leftArr, int lsize, Measure** rightArr, int rsize, Measu
         resultIndex++;
         rightIndex++;
     }
-    if ((canReturnPerfect(leftArr, lsize) || canReturnPerfect(rightArr, rsize)) && !canReturnPerfect(result, resultIndex)) {
-        cout << "err" << endl;
-    }
-    
     return resultIndex;
 }
 
@@ -512,6 +505,7 @@ struct FoundOrIndex {
     }
 };
 
+// binary search to find the correct index
 FoundOrIndex findCacheIndex(std::vector<DocCache>& arr, uint64_t key) {
     size_t low = 0;
     size_t high = arr.size();
@@ -529,15 +523,6 @@ FoundOrIndex findCacheIndex(std::vector<DocCache>& arr, uint64_t key) {
     }
 
     return FoundOrIndex::Miss(static_cast<int>(low));
-}
-FoundOrIndex findCacheIndexSlow(std::vector<DocCache>& arr, uint64_t key) {
-    for (int i = 0; i< arr.size();i++) {
-        if(arr[i].key == key) {
-            return FoundOrIndex::Found(&arr[i]);
-        }
-    }
-
-    return FoundOrIndex::Miss(static_cast<int>(0));
 }
 
 void printDoc (uint32_t docId, uint32_t indent) {
@@ -711,7 +696,14 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
                     nextArena = currentArena; // swap pointers
                     currentArena = tmp;
                 }
+                for (int i=0;i<rightSet.set.count; i ++ ) {
+                    decMeasureRc(rightSet.set.sets[i]);
+                }
             }
+        }
+        
+        for (int i=0;i<left.set.count; i ++ ) {
+            decMeasureRc(left.set.sets[i]);
         }
     }
     if (result.type == MeasureSetType::TAINTED) {
@@ -728,7 +720,7 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
     }
 }
 
-Cost costText (uint32_t col, uint32_t indent, uint32_t length) {
+Cost costText (uint32_t col, uint32_t length) {
     uint32_t stop = col + length;
     if (stop > pageWidth) {
         uint32_t maxwc = max(pageWidth, col);
@@ -744,35 +736,10 @@ Cost costNl () {
     return { 0, 1 };
 }
 
-MeasureSet attachDirection(MeasureSet set, bool goLeft) {
-    if (set.type == MeasureSetType::TAINTED) {
-        TaintedTrunk* taintedTrunk = allocateTaintedTrunk();
-        taintedTrunk->type = TaintedTrunkType::CHOICE;
-        taintedTrunk->choice.goLeft = goLeft;
-        taintedTrunk->choice.parent = set.tainted.trunk;
-        set.tainted.trunk = taintedTrunk;
-    } else {
-        for (int i = 0; i < set.set.count; i ++) {
-            Measure* measure = allocateMeasure();
-            measure->type = MeasureType::CHOICE;
-            measure->choice.parent = set.set.sets[i];
-            measure->choice.goLeft = goLeft;
-            measure->last = set.set.sets[i]->last;
-            measure->cost = set.set.sets[i]->cost;
-            set.set.sets[i] = measure;
-        }
-    }
-    return set;
-}
-
 MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool flatten, Measure** arena) {
     Doc* doc = &docs[docId];
     if (doc->cache_id != 0) {
         auto key = cacheKey(col, indent, flatten);
-        // auto slow = findCacheIndexSlow(cache[doc->cache_id], key);
-        // if (slow.found) {
-        //     // cout <<"success"<<endl;
-        // }
         auto find = findCacheIndex(cache[doc->cache_id], key);
         if (find.found) {
             return find.foundCache->ms;
@@ -801,6 +768,34 @@ MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool fl
     }
 }
 
+MeasureSet measureSetForText(uint32_t stringRef, uint32_t strLen, uint32_t col, Measure** arena) {
+    if (col + strLen <= computationWidth) {
+        MeasureSet ms;
+        ms.type = MeasureSetType::SET;
+        ms.set.count = 1;
+        ms.set.sets = arena;
+        Measure* measure = allocateMeasure();
+        measure->type = MeasureType::TEXT;
+        measure->text.stringRef = stringRef;
+        measure->cost = costText(col, strLen);
+        measure->last = strLen + col;
+        ms.set.sets[0] = measure;
+        return ms;
+    } else {
+        TaintedTrunk* trunk = allocateTaintedTrunk();
+        trunk->type = TaintedTrunkType::VALUE;
+        trunk->value.measure.type = MeasureType::TEXT;
+        trunk->value.measure.text.stringRef = stringRef;
+        trunk->value.measure.rc = NO_GC;
+        trunk->value.measure.cost = costText(col, strLen);
+        trunk->value.measure.last = strLen + col;
+        MeasureSet ms;
+        ms.type = MeasureSetType::TAINTED;
+        ms.tainted.trunk = trunk;
+        return ms;
+    }
+}
+
 /**
  * The arena is used to allow children to allow returning a list of pointers without allocation arrays themselves.
  *
@@ -813,43 +808,24 @@ MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten,
     switch (doc->type)
     {
     case DocType::TEXT : {
-        uint32_t strLen = doc->text.stringLength;
-        if (col + strLen <= computationWidth) {
+        return measureSetForText(doc->text.stringRef, doc->text.stringLength, col, arena);
+    }
+    case DocType::NEWLINE : {
+        if (flatten) {
+            return measureSetForText(SPACE_STRING_REF, 1, col, arena);
+        } else {
             MeasureSet ms;
             ms.type = MeasureSetType::SET;
             ms.set.count = 1;
             ms.set.sets = arena;
             Measure* measure = allocateMeasure();
-            measure->type = MeasureType::END;
-            measure->cost = costText(col, indent, strLen);
-            measure->last = strLen + col;
+            measure->type = MeasureType::NEWLINE;
+            measure->newline.indent = indent;
+            measure->cost = costNl();
+            measure->last = indent;
             ms.set.sets[0] = measure;
             return ms;
-        } else {
-            TaintedTrunk* trunk = allocateTaintedTrunk();
-            trunk->type = TaintedTrunkType::VALUE;
-            trunk->value.measure.type = MeasureType::END;
-            trunk->value.measure.rc = NO_GC;
-            trunk->value.measure.cost = costText(col, indent, strLen);
-            trunk->value.measure.last = strLen + col;
-            MeasureSet ms;
-            ms.type = MeasureSetType::TAINTED;
-            ms.tainted.trunk = trunk;
-            return ms;
         }
-
-    }
-    case DocType::NEWLINE : {
-        MeasureSet ms;
-        ms.type = MeasureSetType::SET;
-        ms.set.count = 1;
-        ms.set.sets = arena;
-        Measure* measure = allocateMeasure();
-        measure->type = MeasureType::END;
-        measure->cost = costNl();
-        measure->last = indent;
-        ms.set.sets[0] = measure;
-        return ms;
     }
     case DocType::ALIGN :
         return resolveCached (doc->align.alignDoc, col, col, flatten, arena); // pass through the arena
@@ -875,20 +851,13 @@ MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten,
         
         if (leftDoc->nlCount < rightDoc->nlCount) {
             MeasureSet left = resolveCached (doc->choice.leftDoc, col, indent, flatten, childArenaLeft);
-            left = attachDirection(left, true);
             MeasureSet right = resolveCached (doc->choice.rightDoc, col, indent, flatten, childArenaRight);
-            right = attachDirection(right, false);
             
             MeasureSet ms = mergeSet(left, right, arena, MEASURE_ARENA_SIZE);
-            if (left.type == MeasureSetType::SET && right.type == MeasureSetType::SET && (canReturnPerfect(left.set.sets, left.set.count)||canReturnPerfect(right.set.sets, right.set.count)) &&!canReturnPerfect(ms.set.sets, ms.set.count)) {
-                cout <<"murder!!!" << endl;
-            }
             return ms;
         } else {
             MeasureSet right = resolveCached (doc->choice.rightDoc, col, indent, flatten, childArenaRight);
-            right = attachDirection(right, false);
             MeasureSet left = resolveCached (doc->choice.leftDoc, col, indent, flatten, childArenaLeft);
-            left = attachDirection(left, true);
             return mergeSet(right, left, arena, MEASURE_ARENA_SIZE);
         }
     }
@@ -908,17 +877,6 @@ Measure* expandTainted (TaintedTrunk* trunk) {
     } else if(trunk->type == TaintedTrunkType::RIGHT) {
         Measure* rightMeasure = expandTainted(trunk->right.rightTrunk);
         return measureConcat(&trunk->right.leftMeasure, rightMeasure);
-    } else if (trunk->type == TaintedTrunkType::CHOICE) {
-        Measure* inner = expandTainted(trunk->choice.parent);
-        
-        Measure* measure = allocateMeasure();
-        measure->type = MeasureType::CHOICE;
-        measure->choice.parent = inner;
-        measure->choice.goLeft = trunk->choice.goLeft;
-        measure->last = inner->choice.parent->last;
-        measure->cost = inner->choice.parent->cost;
-
-        return measure;
     }else {
         Measure* leftMeasure = expandTainted(trunk->left.leftTrunk);
         Measure* arena [MEASURE_ARENA_SIZE];
@@ -934,60 +892,30 @@ Measure* expandTainted (TaintedTrunk* trunk) {
 }
 
 
-uint32_t renderChoiceLess (uint32_t docId, Measure* guide, uint32_t col, uint32_t indent, bool flatten, stringbuf& buf) {
-    Doc* doc = &docs[docId];
-    switch (doc->type)
+void renderChoiceLess (Measure* choiceLess, stringbuf& buf) {
+    switch (choiceLess->type)
     {
-        case DocType::TEXT : {
-            buf.sputn(strings[doc->text.stringRef].c_str(), doc->text.stringLength);
-            return col + doc->text.stringLength;
-        }
-        case DocType::NEWLINE : {
-            if (flatten) {
-                buf.sputn(" ", 1);
-                return col + 1;
-            } else {
-                char ch = ' ';
-                int n = indent;
-
-                string repeated(n, ch);  
-                buf.sputn("\n", 1);
-                buf.sputn(repeated.c_str(), repeated.size());
-                return indent;
-            }
-        }
-        case DocType::ALIGN :
-            return renderChoiceLess (doc->align.alignDoc, guide, col, col, flatten, buf); 
-        case DocType::CONCAT :{
-            if (guide->type != MeasureType::CONCAT) {
-                cout<<"concat missmatch!"<<endl;
-            }
-            col = renderChoiceLess(doc->concat.leftDoc, guide->concat.parentLeft, col, indent, flatten, buf);
-            return renderChoiceLess(doc->concat.rightDoc, guide->concat.parentRight, col, indent, flatten, buf);
-            // Measure* childArena [MEASURE_ARENA_SIZE];
-            // MeasureSet left = resolve (doc->concat.leftDoc, col, indent, flatten, childArena);
-            // use parent arena, because processConcat is used to return the value and therefore the value should survive.
-            // return processConcat(left, doc->concat.rightDoc, col, indent, flatten, arena); 
-        }
-            
-        case DocType::CHOICE : {
-            if (guide->type != MeasureType::CHOICE) {
-                cout<<"choice missmatch!"<<endl;
-            }
-            if (guide->choice.goLeft) {
-                return renderChoiceLess(doc->choice.leftDoc, guide->choice.parent, col, indent, flatten, buf);
-            } else {
-                return renderChoiceLess(doc->choice.rightDoc, guide->choice.parent, col, indent, flatten, buf);
-            }
-        }
-        case DocType::FLATTEN :{
-            return renderChoiceLess (doc->flatten.flattenDoc, guide, col, indent, true, buf); 
-        }
-        case DocType::NEST : {
-            return renderChoiceLess (doc->nest.nestedDoc, guide, col, indent + doc->nest.indent, flatten, buf); 
-        }
+    case MeasureType::CONCAT:{
+        renderChoiceLess(choiceLess->concat.parentLeft, buf);
+        renderChoiceLess(choiceLess->concat.parentRight, buf);
+        return;
     }
-    throw "missing case in renderChoiceLess";
+
+    case MeasureType::TEXT:{
+        auto str = &strings[choiceLess->text.stringRef];
+        buf.sputn(str->c_str(), str->length());
+        return;
+    }
+
+    case MeasureType::NEWLINE:{
+        char ch = ' ';
+        string repeated(choiceLess->newline.indent, ch);  
+        buf.sputn("\n", 1);
+        buf.sputn(repeated.c_str(), repeated.size());
+        return;
+    }
+    }
+    throw "Render missing case";
 }
 
 struct Output {
@@ -1005,11 +933,11 @@ Output print(uint32_t docId) {
         measure = expandTainted(ms.tainted.trunk);
     } else {
         measure = ms.set.sets[0];
-        for (int i=0; i < ms.set.count; i ++) {
-            cout << "option: width: " << ms.set.sets[i]->cost.widthCost << "  line: " << ms.set.sets[i]->cost.lineCost << endl;
-        }
+        // for (int i=0; i < ms.set.count; i ++) {
+        //     cout << "option: width: " << ms.set.sets[i]->cost.widthCost << "  line: " << ms.set.sets[i]->cost.lineCost << endl;
+        // }
     }
     stringbuf buf;
-    renderChoiceLess(docId, measure, 0, 0, false, buf);
+    renderChoiceLess(measure, buf);
     return {buf.str(), measure->cost, isTainted};
 }
