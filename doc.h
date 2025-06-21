@@ -4,7 +4,8 @@
 #include <iostream>
 #include <climits>
 #include <algorithm>
-
+#include <cstdint>
+#include <unordered_map>
 #define MEASURE_ARENA_SIZE 250
 #define NO_GC UINT32_MAX
 using namespace std;
@@ -182,7 +183,7 @@ vector<int> cacheWeight;
 // 
 #define SPACE_STRING_REF 0
 vector<string> strings = {" "};
-vector<vector<DocCache>> cache;
+vector<unordered_map<uint64_t, DocCache>> cache;
 BlockAlloc blockAlloc = {nullptr, 0};
 // Since measures might be short or long lived we allocate them in bulk, 
 // and if they are no longer need then return them to the pool
@@ -296,8 +297,6 @@ void incTaintedTrunkRc(TaintedTrunk* m) {
     m->rc++;
 }
 
-
-// the hard problem is temporary measure sets
 
 void updateCache (uint32_t docId, int maxChildCacheDistance) {
     if (maxChildCacheDistance > cacheDistance) {
@@ -742,10 +741,16 @@ MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool fl
     Doc* doc = &docs[docId];
     if (doc->cache_id != 0) {
         auto key = cacheKey(col, indent, flatten);
-        auto find = findCacheIndex(cache[doc->cache_id], key);
-        if (find.found) {
-            return find.foundCache->ms;
+        auto c = &cache[doc->cache_id];
+        auto it = c->find(key);
+        if (it != c->end()) {
+            return (*it).second.ms;
         }
+
+        // auto find = findCacheIndex(cache[doc->cache_id], key);
+        // if (find.found) {
+        //     return find.foundCache->ms;
+        // }
 
         MeasureSet ms = resolve(docId, col, indent, flatten, arena);
         
@@ -761,10 +766,13 @@ MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool fl
             }
             ms.set.sets = persitentStorage;
         }
-        DocCache c = DocCache::Create(key, ms);
+        DocCache dc = DocCache::Create(key, ms);
         // insert into the array and ensure that it stays sorted
-        cache[doc->cache_id].insert(cache[doc->cache_id].begin() + find.missingIndex, c);
-        return c.ms;
+        // cache[doc->cache_id].insert(cache[doc->cache_id].begin() + find.missingIndex, c);
+        // c[key] = c;
+        // c->insert({key,dc});
+        c->emplace(key,dc);
+        return dc.ms;
     } else {
         return resolve(docId, col, indent, flatten, arena);
     }
