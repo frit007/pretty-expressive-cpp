@@ -97,12 +97,6 @@ int main(int argc, char *argv[])
     std::string basePath = envPath != nullptr ? envPath : "../data";
     std::string fullPath = basePath + "/random-tree-" + std::to_string(cfg.size) + ".sexp";
 
-    cout << fullPath<< endl;
-    // std::string content = readFile(fullPath);
-    // cout<< content<<endl;
-    // json parsed = json::parse(content);
-    
-
 
     std::ifstream f(fullPath);
     json data = json::parse(f);

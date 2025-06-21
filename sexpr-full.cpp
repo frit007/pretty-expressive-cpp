@@ -75,33 +75,6 @@ uint32_t pp(SExpr* expr) {
     }
 }
 
-// int main() {
-//     cout << "start" << endl;
-//     auto [t,c] = testExpr(16,0);
-
-//     cout << "created the expr" << endl;
-//     uint32_t parent = pp(t);
-//     cout << parent << endl;
-    
-//     auto start = std::chrono::system_clock::now();
-//     Output out = print(parent);
-//     auto end = std::chrono::system_clock::now();
-
-//     cout << out.layout << endl;
-//     int count = 0;
-//     for (int i = 0; i < out.layout.length(); i++) {
-//         if (out.layout[i] == '\n') {
-//             count++;
-//         }
-//     }
-//     cout << "lines:"<<count << endl;
-//     cout << "tainted:"<< out.isTainted << endl;
-//     cout << "took:"<< std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << endl;
-//     cout << "width:"<< out.cost.widthCost << " lines:"<<out.cost.lineCost<< endl;
-//     // printDoc(parent, 0);
-//     return 0;
-// }
-
 
 int main(int argc, char *argv[])
 {

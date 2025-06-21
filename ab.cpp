@@ -12,10 +12,6 @@ uint32_t ab() {
 }
 
 int main() {
-    // uint32_t parent = createChoice(createText("Hell"), createText("World"));
-    // uint32_t one = createChoice(createText("Hell"), createText("World"));
-    // uint32_t two = createChoice(createText("huh!!"), createText("func"));
-    // uint32_t parent = createConcat(one, two);
     uint32_t parent = ab();
     cout << parent << endl;
     cout << parent << endl;

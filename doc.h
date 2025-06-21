@@ -5,7 +5,7 @@
 #include <climits>
 #include <algorithm>
 
-#define MEASURE_ARENA_SIZE 500
+#define MEASURE_ARENA_SIZE 250
 #define NO_GC UINT32_MAX
 using namespace std;
 enum class DocType {TEXT, NEWLINE, CONCAT, NEST, ALIGN, CHOICE, FLATTEN};
@@ -362,7 +362,7 @@ uint32_t createChoice(uint32_t left, uint32_t right) {
     return docId;
 }
 
-uint32_t creatFlatten(uint32_t inner) {
+uint32_t createFlatten(uint32_t inner) {
     Doc doc;
     doc.type = DocType::FLATTEN;
     doc.nlCount = 0;
@@ -398,7 +398,9 @@ uint32_t createNest(uint32_t inner, uint32_t indent) {
     updateCache(docId, cacheWeight[inner]);
     return docId;
 }
-
+uint32_t group(uint32_t inner) {
+    return createChoice(inner, createFlatten(inner));
+}
 
 bool costLEQ (Cost left, Cost right) {
     if (left.widthCost == right.widthCost) {
@@ -882,7 +884,7 @@ Measure* expandTainted (TaintedTrunk* trunk) {
         Measure* arena [MEASURE_ARENA_SIZE];
         MeasureSet ms = resolve(trunk->left.rightDoc, leftMeasure->last, trunk->indent, trunk->flatten, arena);
         if (ms.type == MeasureSetType::TAINTED) {
-            return expandTainted(ms.tainted.trunk);
+            return measureConcat(leftMeasure, expandTainted(ms.tainted.trunk));
         } else {
             Measure* m = ms.set.sets[0]; // return the first result (we can't release this memory since it is used to render)
             m->rc = NO_GC;
