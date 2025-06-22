@@ -276,17 +276,17 @@ void decTaintedTrunkRc(TaintedTrunk* t) {
     if (t->rc == UINT_MAX) { // these are the cached trunks, there is no reason to rc them
         return;
     }
-    t->rc--;
-    if (t->rc == 0) {
-        if (t->type == TaintedTrunkType::LEFT) {
-            decTaintedTrunkRc(t->left.leftTrunk);
-        } else if (t->type == TaintedTrunkType::RIGHT) {
-            decTaintedTrunkRc(t->right.rightTrunk);
-        } else if (t->type == TaintedTrunkType::VALUE) {
-            // nothing to do
-        }
-        taintedTrunkPool.push_back(t);
-    }
+    // t->rc--;
+    // if (t->rc == 0) {
+    //     if (t->type == TaintedTrunkType::LEFT) {
+    //         decTaintedTrunkRc(t->left.leftTrunk);
+    //     } else if (t->type == TaintedTrunkType::RIGHT) {
+    //         decTaintedTrunkRc(t->right.rightTrunk);
+    //     } else if (t->type == TaintedTrunkType::VALUE) {
+    //         // nothing to do
+    //     }
+    //     taintedTrunkPool.push_back(t);
+    // }
 }
 void incTaintedTrunkRc(TaintedTrunk* m) {
     if (m->rc == UINT_MAX) { // these are the cached trunks, there is no reason to rc them
@@ -437,7 +437,7 @@ bool containsNull(MeasureContainer arr) {
             return true;
         }
     }
-    return false;
+    return false || arr->size() == 0;
 }
 
 int mergeList(MeasureContainer leftArr, MeasureContainer rightArr, MeasureContainer result) {
@@ -574,10 +574,27 @@ void printDoc (uint32_t docId, uint32_t indent) {
 MeasureSet mergeSet(MeasureSet left, MeasureSet right, MeasureContainer result) {
     if (right.type == MeasureSetType::TAINTED) {
         decTaintedTrunkRc(right.tainted.trunk);
-        return left;
+        if (left.type == MeasureSetType::TAINTED) {
+            return left;
+        }
+        MeasureSet ms;
+        ms.type = MeasureSetType::SET;
+        ms.set.sets = result;
+        // we must copy to result, because the container we are currently using is not going to survive
+        for (int i = 0; i < left.set.sets->size(); i++) {
+            result->push_back((*left.set.sets)[i]);
+        }
+        return ms;
     } else if (left.type == MeasureSetType::TAINTED) {
         decTaintedTrunkRc(left.tainted.trunk);
-        return right;
+        MeasureSet ms;
+        ms.type = MeasureSetType::SET;
+        ms.set.sets = result;
+        // we must copy to result, because the container we are currently using is not going to survive
+        for (int i = 0; i < right.set.sets->size(); i++) {
+            result->push_back((*right.set.sets)[i]);
+        }
+        return ms;
     } else {
         int size = mergeList(left.set.sets, right.set.sets, result);
         MeasureSet ms;
@@ -591,10 +608,6 @@ MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten,
 MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool flatten, MeasureContainer outputArena);
 
 MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, uint32_t indent, bool flatten, MeasureContainer outputArena) {
-    //
-    // Measure* one [MEASURE_ARENA_SIZE];
-    // Measure* two [MEASURE_ARENA_SIZE];
-    // Measure* childArena[MEASURE_ARENA_SIZE];
     MeasureContainer one = borrowMeasureContainer();
     MeasureContainer two = borrowMeasureContainer();
     MeasureContainer childArena = borrowMeasureContainer();
@@ -725,7 +738,8 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
         ms.set.sets = outputArena;
         outputArena->clear();
         for (int i = 0; i < result.set.sets->size(); i++) {
-            outputArena->push_back((*result.set.sets)[i]);
+            auto a = (*result.set.sets)[i];
+            outputArena->push_back(a);
         }
         releaseMeasureContainer(one);
         releaseMeasureContainer(two);
@@ -859,6 +873,9 @@ MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten,
         // Measure* childArena [MEASURE_ARENA_SIZE];
         MeasureContainer childArena = borrowMeasureContainer();
         MeasureSet left = resolveCached (doc->concat.leftDoc, col, indent, flatten, childArena);
+        if(left.type == MeasureSetType::SET && containsNull(left.set.sets)) {
+            cout << "null added left" << endl;
+        } 
         if(left.type == MeasureSetType::SET && containsNull(left.set.sets)) {
             cout << "null added left" << endl;
         } 
