@@ -21,8 +21,6 @@ int main(int argc, char *argv[]) {
     const char* envPath = std::getenv("BENCHDATA");
     std::string basePath = envPath != nullptr ? envPath : "../data";
     std::string fullPath = basePath + "/words";
-
-    std::cout << " words from "  << std::endl;
     
     ifstream wordFile(fullPath);
     std::vector<string> xs ={};
@@ -32,7 +30,6 @@ int main(int argc, char *argv[]) {
     while (getline (wordFile, line) && i-- > 0) {
         xs.push_back(line);
     }
-    cout << "Read " << xs.size() << " words from " << fullPath << endl;
 
     uint32_t parent = fillSep(xs);
     
