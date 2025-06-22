@@ -92,7 +92,6 @@ struct Measure {
     };
     MeasureType type;
     uint16_t last;
-    uint32_t rc; // we need to keep track of how many a measure is reference before it is returned(TODO: might not be necessary)
     Cost cost;
 };
 
@@ -118,7 +117,6 @@ struct TaintedTrunkValue
 struct TaintedTrunk {
     uint32_t col;
     uint32_t indent;
-    uint32_t rc;
     bool flatten;
     TaintedTrunkType type;
     union {
@@ -228,28 +226,7 @@ Measure* allocateMeasure() {
     // take the last element in the pool
     Measure* measure = measurePool[measurePool.size() - 1];
     measurePool.pop_back();
-    measure->rc = 1;
     return measure;
-}
-
-void decMeasureRc(Measure* m) {
-    if (m->rc == UINT_MAX) { // these are the cached measures, there is no reason to rc them
-        return;
-    }
-    // m->rc--;
-    // if (m->rc == 0) {
-    //     if (m->type == MeasureType::CONCAT) {
-    //         decMeasureRc(m->concat.parentLeft);
-    //         decMeasureRc(m->concat.parentRight);
-    //     }
-    //     measurePool.push_back(m);
-    // }
-}
-void incMeasureRc(Measure* m) {
-    if (m->rc == UINT_MAX) { // these are the cached measures, there is no reason to rc them
-        return;
-    }
-    m->rc++;
 }
 
 TaintedTrunk* allocateTaintedTrunk() {
@@ -268,33 +245,8 @@ TaintedTrunk* allocateTaintedTrunk() {
     // take the last element in the pool
     TaintedTrunk* measure = taintedTrunkPool[taintedTrunkPool.size() - 1];
     taintedTrunkPool.pop_back();
-    measure->rc = 1;
     return measure;
 }
-
-void decTaintedTrunkRc(TaintedTrunk* t) {
-    if (t->rc == UINT_MAX) { // these are the cached trunks, there is no reason to rc them
-        return;
-    }
-    // t->rc--;
-    // if (t->rc == 0) {
-    //     if (t->type == TaintedTrunkType::LEFT) {
-    //         decTaintedTrunkRc(t->left.leftTrunk);
-    //     } else if (t->type == TaintedTrunkType::RIGHT) {
-    //         decTaintedTrunkRc(t->right.rightTrunk);
-    //     } else if (t->type == TaintedTrunkType::VALUE) {
-    //         // nothing to do
-    //     }
-    //     taintedTrunkPool.push_back(t);
-    // }
-}
-void incTaintedTrunkRc(TaintedTrunk* m) {
-    if (m->rc == UINT_MAX) { // these are the cached trunks, there is no reason to rc them
-        return;
-    }
-    m->rc++;
-}
-
 
 void updateCache (uint32_t docId, int maxChildCacheDistance) {
     if (maxChildCacheDistance > cacheDistance) {
@@ -426,8 +378,6 @@ Measure* measureConcat(Measure* left, Measure* right) {
     newMeasure->concat.parentRight = right;
     newMeasure->cost = costAdd(left->cost, right->cost);
     newMeasure->last = right->last;
-    incMeasureRc(left);
-    incMeasureRc(right);
     return newMeasure;
 }
 
@@ -447,10 +397,8 @@ int mergeList(MeasureContainer leftArr, MeasureContainer rightArr, MeasureContai
         Measure* left = (*leftArr)[leftIndex];
         Measure* right = (*rightArr)[rightIndex];
         if (measureLEQ(left, right)) {
-            decMeasureRc(right);
             rightIndex++;
         } else if(measureLEQ(right, left)) {
-            decMeasureRc(left);
             leftIndex++;
         } else if(left->last > right->last) {
             result->push_back(left);
@@ -573,7 +521,6 @@ void printDoc (uint32_t docId, uint32_t indent) {
 
 MeasureSet mergeSet(MeasureSet left, MeasureSet right, MeasureContainer result) {
     if (right.type == MeasureSetType::TAINTED) {
-        decTaintedTrunkRc(right.tainted.trunk);
         if (left.type == MeasureSetType::TAINTED) {
             return left;
         }
@@ -586,7 +533,6 @@ MeasureSet mergeSet(MeasureSet left, MeasureSet right, MeasureContainer result) 
         }
         return ms;
     } else if (left.type == MeasureSetType::TAINTED) {
-        decTaintedTrunkRc(left.tainted.trunk);
         MeasureSet ms;
         ms.type = MeasureSetType::SET;
         ms.set.sets = result;
@@ -644,7 +590,6 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
                 trunk->right.rightTrunk = rightSet.tainted.trunk;
 
                 trunk->right.leftMeasure = *leftMeasure;
-                trunk->right.leftMeasure.rc = NO_GC;
         
                 MeasureSet ms;
                 ms.type = MeasureSetType::TAINTED;
@@ -674,7 +619,6 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
                     Measure* rightMeasure = (*rightSet.set.sets)[rightIndex];
                     auto cost = costAdd(leftMeasure->cost, rightMeasure->cost);
                     if (costLEQ(cost, best->cost)) {
-                        decMeasureRc(best);
                         best = measureConcat(leftMeasure, rightMeasure);
                     } else {
                         outputArena->push_back(measureConcat(leftMeasure, rightMeasure));
@@ -716,15 +660,9 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
                     currentArena = tmp;
                     nextArena->clear();
                 }
-                for (int i=0;i<rightSet.set.sets->size(); i ++ ) {
-                    decMeasureRc((*rightSet.set.sets)[i]);
-                }
             }
         }
         
-        for (int i=0;i<left.set.sets->size(); i ++ ) {
-            decMeasureRc((*left.set.sets)[i]);
-        }
     }
     if (result.type == MeasureSetType::TAINTED) {
         
@@ -793,7 +731,6 @@ MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool fl
             #endif
             for (int i = 0; i < ms.set.sets->size(); i++) {
                 Measure* m = (*ms.set.sets)[i];
-                m->rc = NO_GC; // TODO: maybe mark parents as NO_GC (although this might cause unnecessary cache misses)
                 persistentStorage->push_back(m);
             }
             ms.set.sets = persistentStorage;
@@ -827,7 +764,6 @@ MeasureSet measureSetForText(uint32_t stringRef, uint32_t strLen, uint32_t col, 
         trunk->type = TaintedTrunkType::VALUE;
         trunk->value.measure.type = MeasureType::TEXT;
         trunk->value.measure.text.stringRef = stringRef;
-        trunk->value.measure.rc = NO_GC;
         trunk->value.measure.cost = costText(col, strLen);
         trunk->value.measure.last = strLen + col;
         MeasureSet ms;
@@ -955,7 +891,6 @@ Measure* expandTainted (TaintedTrunk* trunk) {
             return measureConcat(leftMeasure, expandTainted(ms.tainted.trunk));
         } else {
             Measure* m = (*ms.set.sets)[0]; // return the first result (we can't release this memory since it is used to render)
-            m->rc = NO_GC;
             return m;
         }
     }
