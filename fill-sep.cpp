@@ -15,7 +15,6 @@ uint32_t fillSep (const std::vector<string>& xs) {
 
 
 int main(int argc, char *argv[]) {
-    cout << "Hello World";
     Config cfg = parseArgs(argc, argv);
 
     const char* envPath = std::getenv("BENCHDATA");

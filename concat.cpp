@@ -8,6 +8,7 @@ uint32_t pp (uint64_t n) {
     }
 }
 
+
 int main(int argc, char *argv[]) {
     Config cfg = parseArgs(argc, argv);
     

@@ -70,18 +70,10 @@ Config parseArgs(int argc, char* argv[]) {
         else if (arg == "--out") cfg.out = nextArg();
         else if (arg == "--view-cost") cfg.viewCost = true;
         else {
-            cout << "unknown arg:" << arg<<endl;
-            sleep(1);
-            throw;
+
         }
     }
     return cfg;
-}
-
-// Mock benchmark function
-Output benchFn(const Config& cfg) {
-    // Simulate output for example purposes
-    return { "Hello, world!\n", {1,2}, false };
 }
 
 void runBenchmark(const std::string& program, const Config& cfg, uint32_t doc) {
@@ -112,13 +104,13 @@ void runBenchmark(const std::string& program, const Config& cfg, uint32_t doc) {
 
     std::string md5 = md5Hash(result.layout);
 
-    std::cout << "((target pretty-expressive-lean)\n"
-              << " (program " << program << ")\n"
-              << " (duration " << duration.count() << ")\n"
-              << " (lines " << lineCount << ")\n"
-              << " (size " << cfg.size << ")\n"
-              << " (md5 " << md5 << ")\n"
-              << " (page-width " << cfg.pageWidth << ")\n"
-              << " (computation-width " << cfg.computationWidth << ")\n"
-              << " (tainted? " << (result.isTainted ? "true" : "false") << "))\n";
+    std::cout << "((target pretty-expressive-cpp)"
+              << " (program " << program << ")"
+              << " (duration " << duration.count() << ")"
+              << " (lines " << lineCount << ")"
+              << " (size " << cfg.size << ")"
+              << " (md5 " << md5 << ")"
+              << " (page-width " << cfg.pageWidth << ")"
+              << " (computation-width " << cfg.computationWidth << ")"
+              << " (tainted? " << (result.isTainted ? "true" : "false") << "))";
 }
