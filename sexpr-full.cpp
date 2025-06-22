@@ -79,7 +79,7 @@ uint32_t pp(SExpr* expr) {
 int main(int argc, char *argv[])
 {
     Config cfg = parseArgs(argc, argv);
-    auto [t,c] = testExpr(16,0);
+    auto [t,c] = testExpr(cfg.size, 0);
     uint32_t parent = pp(t);
     runBenchmark ("sexpr-full",cfg, parent);
 }
