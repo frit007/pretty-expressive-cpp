@@ -229,7 +229,7 @@ Measure* allocateMeasure() {
     return measure;
 }
 
-TaintedTrunk* allocateTaintedTrunk() {
+TaintedTrunk* allocateTaintedTrunk(TaintedTrunkType type, uint32_t col, uint32_t indent, bool flatten) {
     if (taintedTrunkPool.size() == 0) {
         // if the pool is empty, then fill the pool
         int allocationSize = 1000;
@@ -243,9 +243,13 @@ TaintedTrunk* allocateTaintedTrunk() {
         }
     }
     // take the last element in the pool
-    TaintedTrunk* measure = taintedTrunkPool[taintedTrunkPool.size() - 1];
+    TaintedTrunk* trunk = taintedTrunkPool[taintedTrunkPool.size() - 1];
+    trunk->col = col;
+    trunk->indent = indent;
+    trunk->flatten = flatten;
+    trunk->type = type;
     taintedTrunkPool.pop_back();
-    return measure;
+    return trunk;
 }
 
 void updateCache (uint32_t docId, int maxChildCacheDistance) {
@@ -381,14 +385,6 @@ Measure* measureConcat(Measure* left, Measure* right) {
     return newMeasure;
 }
 
-bool containsNull(MeasureContainer arr) {
-    for (int i = 0 ; i< arr->size(); i++) {
-        if ((*arr)[i] == nullptr) {
-            return true;
-        }
-    }
-    return false || arr->size() == 0;
-}
 
 int mergeList(MeasureContainer leftArr, MeasureContainer rightArr, MeasureContainer result) {
     int leftIndex = 0;
@@ -468,7 +464,7 @@ FoundOrIndex findCacheIndex(std::vector<DocCache>& arr, uint64_t key) {
     return FoundOrIndex::Miss(static_cast<int>(low));
 }
 
-void printDoc (uint32_t docId, uint32_t indent) {
+void _docToString (uint32_t docId, uint32_t indent, stringbuf & sb) {
     char ch = ' ';
     int n = indent;
 
@@ -477,72 +473,86 @@ void printDoc (uint32_t docId, uint32_t indent) {
     switch (doc->type)
     {
         case DocType::TEXT : {
-            cout << repeated << "Text: \"" << strings[doc->text.stringRef]<<"\""<<endl;
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("Text: \"", 7);
+            sb.sputn(strings[doc->text.stringRef].c_str(), doc->text.stringLength);
             return;
         }
         case DocType::NEWLINE : {
-            cout << repeated << "Newline:" <<endl;
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("Newline:", 8);
             return;
         }
         case DocType::ALIGN :
-            cout << repeated << "Align:" <<endl;
-            return printDoc (doc->align.alignDoc, indent + 2); 
+            sb.sputn(repeated.c_str(), repeated.length());
+            return _docToString (doc->align.alignDoc, indent + 2, sb);
         case DocType::CONCAT :{
-            
-            cout << repeated << "Concat l:" <<endl;
-            printDoc(doc->concat.leftDoc, indent+2);
-            cout << repeated << "Concat r:" <<endl;
-            printDoc(doc->concat.rightDoc, indent+2);
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("Concat l:", 9);
+            _docToString(doc->concat.leftDoc, indent+2, sb);
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("Concat r:", 9);
+            _docToString(doc->concat.rightDoc, indent+2, sb);
             return;
-            // Measure* childArena [MEASURE_ARENA_SIZE];
-            // MeasureSet left = resolve (doc->concat.leftDoc, col, indent, flatten, childArena);
-            // use parent arena, because processConcat is used to return the value and therefore the value should survive.
-            // return processConcat(left, doc->concat.rightDoc, col, indent, flatten, arena); 
         }
             
         case DocType::CHOICE : {
-            cout << repeated << "choice l:" <<endl;
-            printDoc(doc->choice.leftDoc, indent + 2);
-            cout << repeated << "choice r:" <<endl;
-            printDoc(doc->choice.rightDoc, indent + 2);
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("choice l:", 9);
+            _docToString(doc->choice.leftDoc, indent + 2, sb);
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("choice r:", 9);
+            _docToString(doc->choice.rightDoc, indent + 2, sb);
             return;
         }
         case DocType::FLATTEN :{
-            cout << repeated << "flatten:" <<endl;
-            return printDoc (doc->flatten.flattenDoc, indent + 2); 
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("flatten:", 8);
+            return _docToString (doc->flatten.flattenDoc, indent + 2, sb);
         }
         case DocType::NEST : {
-            cout << repeated << "nest:" <<endl;
-            return printDoc (doc->nest.nestedDoc, indent + 2); 
+            sb.sputn(repeated.c_str(), repeated.length());
+            sb.sputn("nest:", 5);
+            return _docToString (doc->nest.nestedDoc, indent + 2, sb);
         }
     }
 }
+string docToString(uint32_t docId) {
+    stringbuf buf;
+    _docToString(docId, 0, buf);
+    return buf.str();
+}
+void printDoc (uint32_t docId, uint32_t indent) {
+    stringbuf buf;
+    _docToString(docId, indent, buf);
+    cout << buf.str() << endl;
+}
 
 
-MeasureSet mergeSet(MeasureSet left, MeasureSet right, MeasureContainer result) {
-    if (right.type == MeasureSetType::TAINTED) {
-        if (left.type == MeasureSetType::TAINTED) {
-            return left;
+MeasureSet mergeSet(MeasureSet leftSet, MeasureSet rightSet, MeasureContainer result) {
+    if (rightSet.type == MeasureSetType::TAINTED) {
+        if (leftSet.type == MeasureSetType::TAINTED) {
+            return leftSet;
         }
         MeasureSet ms;
         ms.type = MeasureSetType::SET;
         ms.set.sets = result;
         // we must copy to result, because the container we are currently using is not going to survive
-        for (int i = 0; i < left.set.sets->size(); i++) {
-            result->push_back((*left.set.sets)[i]);
+        for (int i = 0; i < leftSet.set.sets->size(); i++) {
+            result->push_back((*leftSet.set.sets)[i]);
         }
         return ms;
-    } else if (left.type == MeasureSetType::TAINTED) {
+    } else if (leftSet.type == MeasureSetType::TAINTED) {
         MeasureSet ms;
         ms.type = MeasureSetType::SET;
         ms.set.sets = result;
         // we must copy to result, because the container we are currently using is not going to survive
-        for (int i = 0; i < right.set.sets->size(); i++) {
-            result->push_back((*right.set.sets)[i]);
+        for (int i = 0; i < rightSet.set.sets->size(); i++) {
+            result->push_back((*rightSet.set.sets)[i]);
         }
         return ms;
     } else {
-        int size = mergeList(left.set.sets, right.set.sets, result);
+        int size = mergeList(leftSet.set.sets, rightSet.set.sets, result);
         MeasureSet ms;
         ms.type = MeasureSetType::SET;
         ms.set.sets = result;
@@ -553,7 +563,17 @@ MeasureSet mergeSet(MeasureSet left, MeasureSet right, MeasureContainer result) 
 MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten, MeasureContainer outputArena);
 MeasureSet resolveCached (uint32_t docId, uint32_t col, uint32_t indent, bool flatten, MeasureContainer outputArena);
 
-MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, uint32_t indent, bool flatten, MeasureContainer outputArena) {
+MeasureSet processConcat (MeasureSet leftSet, uint32_t rightDocId, uint32_t col, uint32_t indent, bool flatten, MeasureContainer outputArena) {
+    if (leftSet.type == MeasureSetType::TAINTED) {
+        TaintedTrunk* trunk = allocateTaintedTrunk(TaintedTrunkType::LEFT, col, indent, flatten);
+        trunk->left.leftTrunk = leftSet.tainted.trunk;
+        trunk->left.rightDoc = rightDocId;
+
+        MeasureSet ms;
+        ms.type = MeasureSetType::TAINTED;
+        ms.tainted.trunk = trunk;
+        return ms;
+    }
     MeasureContainer one = borrowMeasureContainer();
     MeasureContainer two = borrowMeasureContainer();
     MeasureContainer childArena = borrowMeasureContainer();
@@ -566,103 +586,77 @@ MeasureSet processConcat (MeasureSet left, uint32_t rightDocId, uint32_t col, ui
     bool hasResult = false;
     MeasureSet result;
 
-    if (left.type == MeasureSetType::TAINTED) {
-        TaintedTrunk* trunk = allocateTaintedTrunk();
-        trunk->type = TaintedTrunkType::LEFT;
-        trunk->left.leftTrunk = left.tainted.trunk;
-        trunk->left.rightDoc = rightDocId;
+    for (int leftIndex = 0; leftIndex < leftSet.set.sets->size(); leftIndex++) {
+        Measure* leftMeasure = (*leftSet.set.sets)[leftIndex];
+        childArena->clear();
+        MeasureSet rightSet = resolveCached(rightDocId, leftMeasure->last, indent, flatten, childArena);
+        if (rightSet.type == MeasureSetType::TAINTED) {
+            TaintedTrunk* trunk = allocateTaintedTrunk(TaintedTrunkType::RIGHT, col, indent, flatten);
+            trunk->right.rightTrunk = rightSet.tainted.trunk;
 
-        MeasureSet ms;
-        ms.type = MeasureSetType::TAINTED;
-        ms.tainted.trunk = trunk;
-        releaseMeasureContainer(one);
-        releaseMeasureContainer(two);
-        releaseMeasureContainer(childArena);
-        return ms;
-    } else {
-        for (int leftIndex = 0; leftIndex < left.set.sets->size(); leftIndex++) {
-            Measure* leftMeasure = (*left.set.sets)[leftIndex];
-            childArena->clear();
-            MeasureSet rightSet = resolveCached(rightDocId, leftMeasure->last, indent, flatten, childArena);
-            if (rightSet.type == MeasureSetType::TAINTED) {
-                TaintedTrunk* trunk = allocateTaintedTrunk();
-                trunk->type = TaintedTrunkType::RIGHT;
-                trunk->right.rightTrunk = rightSet.tainted.trunk;
-
-                trunk->right.leftMeasure = *leftMeasure;
-        
-                MeasureSet ms;
-                ms.type = MeasureSetType::TAINTED;
-                ms.tainted.trunk = trunk;
-                if (!hasResult) {
-                    hasResult = true;
-                    result = ms;
-                } else {
-                    result = mergeSet(result, ms, nextArena);
-                    tmp = nextArena; // swap pointers
-                    nextArena = currentArena; // swap pointers
-                    currentArena = tmp;
-                    nextArena->clear();
-                }
+            trunk->right.leftMeasure = *leftMeasure;
+    
+            MeasureSet ms;
+            ms.type = MeasureSetType::TAINTED;
+            ms.tainted.trunk = trunk;
+            if (!hasResult) {
+                hasResult = true;
+                result = ms;
             } else {
-                if (containsNull(rightSet.set.sets)) {
-                    cout << "null after resolveCache" << endl;
-                }
-                // dedup algorithm
-                // 
-                outputArena->clear();
-                bool sawAFreeOption = false;
-                Measure* best = measureConcat(leftMeasure, (*rightSet.set.sets)[0]);
-                sawAFreeOption = best->cost.widthCost == 0 || sawAFreeOption;
+                result = mergeSet(result, ms, nextArena);
+                tmp = nextArena; // swap pointers
+                nextArena = currentArena; // swap pointers
+                currentArena = tmp;
+                nextArena->clear();
+            }
+        } else {
+            // dedup algorithm
+            // 
+            outputArena->clear();
+            bool sawAFreeOption = false;
+            Measure* best = measureConcat(leftMeasure, (*rightSet.set.sets)[0]);
+            sawAFreeOption = best->cost.widthCost == 0 || sawAFreeOption;
 
-                for (int rightIndex = 1; rightIndex < rightSet.set.sets->size(); rightIndex++) {
-                    Measure* rightMeasure = (*rightSet.set.sets)[rightIndex];
-                    auto cost = costAdd(leftMeasure->cost, rightMeasure->cost);
-                    if (costLEQ(cost, best->cost)) {
-                        best = measureConcat(leftMeasure, rightMeasure);
-                    } else {
-                        outputArena->push_back(measureConcat(leftMeasure, rightMeasure));
-                    }
-                }
-
-                outputArena->push_back(best);
-                // dedupSize++;
-                int dedupSize = outputArena->size();
-                for (int i = 0; i < outputArena->size() / 2; ++i) {
-                    std::swap((*outputArena)[i], (*outputArena)[outputArena->size() - 1 - i]);
-                }
-
-                if (!hasResult) {
-                    hasResult = true;
-                    result.type = MeasureSetType::SET;
-                    result.set.sets = nextArena;
-                    for (int i = 0; i < outputArena->size(); i ++) {
-                        result.set.sets->push_back((*outputArena)[i]);
-                    }
-                    if(containsNull(result.set.sets)) {
-                        cout << "no result" << endl;
-                    }
-                    tmp = nextArena; // swap pointers
-                    nextArena = currentArena; // swap pointers
-                    currentArena = tmp;
-                    nextArena->clear();
+            for (int rightIndex = 1; rightIndex < rightSet.set.sets->size(); rightIndex++) {
+                Measure* rightMeasure = (*rightSet.set.sets)[rightIndex];
+                auto cost = costAdd(leftMeasure->cost, rightMeasure->cost);
+                if (costLEQ(cost, best->cost)) {
+                    best = measureConcat(leftMeasure, rightMeasure);
                 } else {
-                    MeasureSet dedupedSet;
-                    dedupedSet.type = MeasureSetType::SET;
-                    dedupedSet.set.sets = outputArena;
-                    result = mergeSet(result, dedupedSet, nextArena);
-
-                    if(containsNull(result.set.sets)) {
-                        cout << "with result" << endl;
-                    }
-                    tmp = nextArena; // swap pointers
-                    nextArena = currentArena; // swap pointers
-                    currentArena = tmp;
-                    nextArena->clear();
+                    outputArena->push_back(measureConcat(leftMeasure, rightMeasure));
                 }
             }
+
+            outputArena->push_back(best);
+            // dedupSize++;
+            int dedupSize = outputArena->size();
+            for (int i = 0; i < outputArena->size() / 2; ++i) {
+                std::swap((*outputArena)[i], (*outputArena)[outputArena->size() - 1 - i]);
+            }
+
+            if (!hasResult) {
+                hasResult = true;
+                result.type = MeasureSetType::SET;
+                result.set.sets = nextArena;
+                for (int i = 0; i < outputArena->size(); i ++) {
+                    result.set.sets->push_back((*outputArena)[i]);
+                }
+                tmp = nextArena; // swap pointers
+                nextArena = currentArena; // swap pointers
+                currentArena = tmp;
+                nextArena->clear();
+            } else {
+                MeasureSet dedupedSet;
+                dedupedSet.type = MeasureSetType::SET;
+                dedupedSet.set.sets = outputArena;
+                result = mergeSet(result, dedupedSet, nextArena);
+
+                tmp = nextArena; // swap pointers
+                nextArena = currentArena; // swap pointers
+                currentArena = tmp;
+                nextArena->clear();
+            }
         }
-        
     }
     if (result.type == MeasureSetType::TAINTED) {
         
@@ -760,7 +754,7 @@ MeasureSet measureSetForText(uint32_t stringRef, uint32_t strLen, uint32_t col, 
         ms.set.sets->push_back(measure);
         return ms;
     } else {
-        TaintedTrunk* trunk = allocateTaintedTrunk();
+        TaintedTrunk* trunk = allocateTaintedTrunk(TaintedTrunkType::VALUE, col, 0, false);
         trunk->type = TaintedTrunkType::VALUE;
         trunk->value.measure.type = MeasureType::TEXT;
         trunk->value.measure.text.stringRef = stringRef;
@@ -808,19 +802,11 @@ MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten,
     case DocType::CONCAT :{
         // Measure* childArena [MEASURE_ARENA_SIZE];
         MeasureContainer childArena = borrowMeasureContainer();
-        MeasureSet left = resolveCached (doc->concat.leftDoc, col, indent, flatten, childArena);
-        if(left.type == MeasureSetType::SET && containsNull(left.set.sets)) {
-            cout << "null added left" << endl;
-        } 
-        if(left.type == MeasureSetType::SET && containsNull(left.set.sets)) {
-            cout << "null added left" << endl;
-        } 
+        MeasureSet leftSet = resolveCached (doc->concat.leftDoc, col, indent, flatten, childArena);
         // bool safe= left.type == MeasureSetType::SET && canReturnPerfect(left.set.sets, left.set.count); 
         // use parent arena, because processConcat is used to return the value and therefore the value should survive.
-        MeasureSet ms =  processConcat(left, doc->concat.rightDoc, col, indent, flatten, arena);
-        if(ms.type == MeasureSetType::SET && containsNull(ms.set.sets)) {
-            cout << "null added" << endl;
-        } 
+        MeasureSet ms =  processConcat(leftSet, doc->concat.rightDoc, col, indent, flatten, arena);
+
         releaseMeasureContainer(childArena);
         // bool safeAfter= ms.type == MeasureSetType::SET && canReturnPerfect(ms.set.sets, ms.set.count); 
         // if (safe && !safeAfter && ms.type == MeasureSetType::SET) {
@@ -836,31 +822,19 @@ MeasureSet resolve (uint32_t docId, uint32_t col, uint32_t indent, bool flatten,
         Doc* leftDoc = &docs[doc->concat.leftDoc];
         Doc* rightDoc = &docs[doc->concat.rightDoc];
         
-        if (leftDoc->nlCount < rightDoc->nlCount) {
-            MeasureSet left = resolveCached (doc->choice.leftDoc, col, indent, flatten, childArenaLeft);
-            if(left.type == MeasureSetType::SET && containsNull(left.set.sets)) {
-                cout << "null added left1" << endl;
-            } 
-            MeasureSet right = resolveCached (doc->choice.rightDoc, col, indent, flatten, childArenaRight);
-            if(right.type == MeasureSetType::SET && containsNull(right.set.sets)) {
-                cout << "null added right1" << endl;
-            } 
-            MeasureSet ms = mergeSet(left, right, arena);
+        if (rightDoc->nlCount < leftDoc->nlCount) {
+            MeasureSet leftSet = resolveCached (doc->choice.leftDoc, col, indent, flatten, childArenaLeft);
+            MeasureSet rightSet = resolveCached (doc->choice.rightDoc, col, indent, flatten, childArenaRight);
+            MeasureSet ms = mergeSet(leftSet, rightSet, arena);
             releaseMeasureContainer(childArenaRight);
             releaseMeasureContainer(childArenaLeft);
             return ms;
         } else {
-            MeasureSet right = resolveCached (doc->choice.rightDoc, col, indent, flatten, childArenaRight);
-            if(right.type == MeasureSetType::SET && containsNull(right.set.sets)) {
-                cout << "null added right2" << endl;
-            } 
-            MeasureSet left = resolveCached (doc->choice.leftDoc, col, indent, flatten, childArenaLeft);
-            if(left.type == MeasureSetType::SET && containsNull(left.set.sets)) {
-                cout << "null added left2" << endl;
-            } 
+            MeasureSet rightSet = resolveCached (doc->choice.rightDoc, col, indent, flatten, childArenaRight);
+            MeasureSet leftSet = resolveCached (doc->choice.leftDoc, col, indent, flatten, childArenaLeft);
 
             
-            MeasureSet ms = mergeSet(right, left, arena);
+            MeasureSet ms = mergeSet(rightSet, leftSet, arena);
             releaseMeasureContainer(childArenaRight);
             releaseMeasureContainer(childArenaLeft);
             return ms;
@@ -888,9 +862,10 @@ Measure* expandTainted (TaintedTrunk* trunk) {
         MeasureContainer arena = borrowMeasureContainer();
         MeasureSet ms = resolve(trunk->left.rightDoc, leftMeasure->last, trunk->indent, trunk->flatten, arena);
         if (ms.type == MeasureSetType::TAINTED) {
-            return measureConcat(leftMeasure, expandTainted(ms.tainted.trunk));
+            Measure* expanded = expandTainted(ms.tainted.trunk);
+            return measureConcat(leftMeasure, expanded);
         } else {
-            Measure* m = (*ms.set.sets)[0]; // return the first result (we can't release this memory since it is used to render)
+            Measure* m = measureConcat(leftMeasure, (*ms.set.sets)[0]); // return the first result (we can't release this memory since it is used to render, sorry borrowMeasureContainer)
             return m;
         }
     }
@@ -922,6 +897,31 @@ void renderChoiceLess (Measure* choiceLess, stringbuf& buf) {
     }
     throw "Render missing case";
 }
+//usefull for debugging
+string renderChoiceLessNow (Measure* choiceLess) {
+    try {
+        stringbuf buf;
+        renderChoiceLess(choiceLess, buf);
+        return buf.str();
+    } catch (const char* e) {
+        return "nope";
+    }
+}
+string renderChoiceLessSetNow (MeasureSet choiceLess) {
+    try {
+        stringbuf buf;
+        if (choiceLess.type == MeasureSetType::TAINTED) {
+            renderChoiceLess(expandTainted(choiceLess.tainted.trunk), buf);
+        } else if(choiceLess.set.sets->size() == 0) {
+            return "";
+        } else  {
+            renderChoiceLess((*choiceLess.set.sets)[0], buf);
+        }
+        return buf.str();
+    } catch (const char* e) {
+        return "nope";
+    }
+}
 
 struct Output {
     string layout;
@@ -939,9 +939,6 @@ Output print(uint32_t docId) {
         measure = expandTainted(ms.tainted.trunk);
     } else {
         measure = (*ms.set.sets)[0];
-        // for (int i=0; i < ms.set.count; i ++) {
-        //     cout << "option: width: " << ms.set.sets[i]->cost.widthCost << "  line: " << ms.set.sets[i]->cost.lineCost << endl;
-        // }
     }
     stringbuf buf;
     renderChoiceLess(measure, buf);
